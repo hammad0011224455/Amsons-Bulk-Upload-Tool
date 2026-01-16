@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-Shopify Bulk Upload — Post-Processor (FIXED)
+Shopify Bulk Upload — Post-Processor (FIXED + TEMPLATE MAKER)
 - Fixes accidental main() override that caused no outputs to be written.
 - Writes Shopify CSV + validation report + input-with-SKUs + image report + title match report.
+- NEW: --make-template writes an Excel/CSV input template that INCLUDES Barcode + Weight columns.
 """
 
 import os
@@ -13,6 +14,190 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 import itertools
 import pandas as pd
+
+def build_barcode_pipe_for_sizes(row, o1vals):
+    import pandas as pd, re
+    base = row.get("Variant Barcode (EAN/UPC)", "")
+    # If user provided a pipe string (or single barcode), use it and normalise to match size count.
+    if not pd.isna(base) and str(base).strip():
+        parts = [p.strip() for p in str(base).split("|")]
+        if o1vals:
+            n = len(o1vals)
+            if len(parts) < n:
+                parts += [""] * (n - len(parts))
+            elif len(parts) > n:
+                parts = parts[:n]
+        return "|".join(parts)
+    # If no sizes or no base barcode, fall back to per-size columns.
+    if not o1vals:
+        return ""
+    per_size = {}
+    for col in row.index:
+        col_str = str(col).strip()
+        col_lower = col_str.lower()
+        if not col_lower.startswith("barcode"):
+            continue
+        if col_str in ("Variant Barcode (EAN/UPC)", "Variant Barcode"):
+            continue
+        val = row.get(col)
+        if pd.isna(val) or str(val).strip() == "":
+            continue
+        parts = re.split(r"[ _-]+", col_str, 1)
+        if len(parts) != 2:
+            continue
+        suffix = parts[1].strip()
+        if not suffix:
+            continue
+        per_size[suffix.lower()] = str(val).strip()
+    if not per_size:
+        return ""
+    barcodes = []
+    for size in o1vals:
+        key = str(size).strip().lower()
+        barcodes.append(per_size.get(key, ""))
+    return "|".join(barcodes)
+
+
+def build_weight_pipe_for_sizes(row, o1vals):
+    import pandas as pd, re
+    base = row.get("Variant Weight", "")
+    # If user provided a pipe string (or single weight), use it and normalise to match size count.
+    if not pd.isna(base) and str(base).strip():
+        parts = [p.strip() for p in str(base).split("|")]
+        if o1vals:
+            n = len(o1vals)
+            if len(parts) < n:
+                parts += [""] * (n - len(parts))
+            elif len(parts) > n:
+                parts = parts[:n]
+        return "|".join(parts)
+    # If no sizes or no base weight, fall back to per-size columns like "Weight 50".
+    if not o1vals:
+        return ""
+    per_size = {}
+    for col in row.index:
+        col_str = str(col).strip()
+        col_lower = col_str.lower()
+        if not col_lower.startswith("weight"):
+            continue
+        if col_str in ("Variant Weight", "Variant Weight Unit (g,kg,lb,oz)"):
+            continue
+        val = row.get(col)
+        if pd.isna(val) or str(val).strip() == "":
+            continue
+        parts = re.split(r"[ _-]+", col_str, 1)
+        if len(parts) != 2:
+            continue
+        suffix = parts[1].strip()
+        if not suffix:
+            continue
+        per_size[suffix.lower()] = str(val).strip()
+    if not per_size:
+        return ""
+    weights = []
+    for size in o1vals:
+        key = str(size).strip().lower()
+        weights.append(per_size.get(key, ""))
+    return "|".join(weights)
+
+
+def build_inventory_pipe_for_sizes(row, o1vals):
+    """Build Variant Inventory pipe list from either:
+    - 'Variant Inventory' (single value or pipe list)
+    - per-size columns like 'Inventory 50', 'Inventory_52', etc.
+    Values are expected to be 0/1 or a quantity.
+    """
+    import pandas as pd, re
+    base = row.get("Variant Inventory", "")
+    if not pd.isna(base) and str(base).strip():
+        parts = [p.strip() for p in str(base).split("|")]
+        if o1vals:
+            n = len(o1vals)
+            if len(parts) < n:
+                parts += [""] * (n - len(parts))
+            elif len(parts) > n:
+                parts = parts[:n]
+        return "|".join(parts)
+
+    if not o1vals:
+        return ""
+
+    per_size = {}
+    for col in row.index:
+        col_str = str(col).strip()
+        col_lower = col_str.lower()
+        if not col_lower.startswith("inventory"):
+            continue
+        if col_str in ("Variant Inventory",):
+            continue
+        val = row.get(col)
+        if pd.isna(val) or str(val).strip() == "":
+            continue
+        parts = re.split(r"[ _-]+", col_str, 1)
+        if len(parts) != 2:
+            continue
+        suffix = parts[1].strip()
+        if not suffix:
+            continue
+        per_size[suffix.lower()] = str(val).strip()
+
+    if not per_size:
+        return ""
+    invs = []
+    for size in o1vals:
+        key = str(size).strip().lower()
+        invs.append(per_size.get(key, ""))
+    return "|".join(invs)
+
+
+def build_grams_pipe_for_sizes(row, o1vals):
+    """Build Variant Grams pipe list from either:
+    - 'Variant Grams' (single value or pipe list)
+    - per-size columns like 'Grams 50', 'Grams_52', etc.
+    """
+    import pandas as pd, re
+    base = row.get("Variant Grams", "")
+    if not pd.isna(base) and str(base).strip():
+        parts = [p.strip() for p in str(base).split("|")]
+        if o1vals:
+            n = len(o1vals)
+            if len(parts) < n:
+                parts += [""] * (n - len(parts))
+            elif len(parts) > n:
+                parts = parts[:n]
+        return "|".join(parts)
+
+    if not o1vals:
+        return ""
+
+    per_size = {}
+    for col in row.index:
+        col_str = str(col).strip()
+        col_lower = col_str.lower()
+        if not col_lower.startswith("grams"):
+            continue
+        if col_str in ("Variant Grams",):
+            continue
+        val = row.get(col)
+        if pd.isna(val) or str(val).strip() == "":
+            continue
+        parts = re.split(r"[ _-]+", col_str, 1)
+        if len(parts) != 2:
+            continue
+        suffix = parts[1].strip()
+        if not suffix:
+            continue
+        per_size[suffix.lower()] = str(val).strip()
+
+    if not per_size:
+        return ""
+    grams = []
+    for size in o1vals:
+        key = str(size).strip().lower()
+        grams.append(per_size.get(key, ""))
+    return "|".join(grams)
+
+
 
 # ---------------- Optional dependencies ----------------
 try:
@@ -44,6 +229,7 @@ def _force_utf8_stdio():
             sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 
+
 def slugify_str(s: str) -> str:
     if _slugify:
         return _slugify(s)[:255]
@@ -62,6 +248,101 @@ SHOPIFY_HEADERS = [
     "Image Src","Image Position","Image Alt Text",
     "Gift Card","SEO Title","SEO Description","Status","Variant Weight Unit"
 ]
+
+# Inventory export (Shopify) column order (matches Shopify "Inventory export" CSV)
+INVENTORY_EXPORT_HEADERS = [
+    "Handle","Title",
+    "Option1 Name","Option1 Value","Option2 Name","Option2 Value","Option3 Name","Option3 Value",
+    "SKU","HS Code","COO","Location","Bin name",
+    "Incoming (not editable)","Unavailable (not editable)","Committed (not editable)",
+    "Available (not editable)","On hand (current)","On hand (new)"
+]
+
+# Default locations used for Amsons inventory export output (first location is treated as the primary stocking location).
+DEFAULT_INVENTORY_LOCATIONS = [
+    "Amsons Birmingham - Small Heath",
+    "Amsons Bradford",
+    "Amsons Birmingham - Alum Rock",
+]
+
+def _to_int_safe(x, default=0):
+    try:
+        if x is None: return default
+        s = str(x).strip()
+        if s == "": return default
+        # Handle "1.0" from Excel
+        return int(float(s))
+    except Exception:
+        return default
+
+def build_shopify_inventory_export_rows(shopify_rows: list, locations=None, in_stock_qty: int = 1000) -> list:
+    """
+    Build a Shopify Inventory Export-style sheet from the generated Shopify import rows.
+
+    Rules (per user request):
+    - Uses the same column sequence as Shopify inventory export.
+    - Reads "Variant Inventory Qty" (0/1 or quantity) from the Shopify import row.
+    * If qty > 0 -> sets primary location On hand (new) = in_stock_qty (default 100). Available + On hand(current) are forced to 0 for fresh import.
+      * If qty <= 0 -> sets primary location Available/On hand(current) = 0.
+    - Additional locations are output as "not stocked" across inventory columns (matches Shopify export).
+    """
+    locs = locations or DEFAULT_INVENTORY_LOCATIONS
+    if not locs:
+        locs = ["Default"]
+    out = []
+    for r in shopify_rows:
+        sku = str(r.get("Variant SKU","") or "").strip()
+        # Skip non-variant rows (e.g., image-only lines).
+        if not sku:
+            continue
+
+        qty_raw = r.get("Variant Inventory Qty", "")
+        qty_in = _to_int_safe(qty_raw, default=0)
+        qty_primary = in_stock_qty if qty_in > 0 else 0
+
+        base = {
+            "Handle": r.get("Handle",""),
+            "Title": r.get("Title",""),
+            "Option1 Name": r.get("Option1 Name",""),
+            "Option1 Value": r.get("Option1 Value",""),
+            "Option2 Name": r.get("Option2 Name",""),
+            "Option2 Value": r.get("Option2 Value",""),
+            "Option3 Name": r.get("Option3 Name",""),
+            "Option3 Value": r.get("Option3 Value",""),
+            "SKU": sku,
+            "HS Code": r.get("Variant HS Code","") or r.get("HS Code","") or "",
+            "COO": r.get("Variant Country of Origin","") or r.get("COO","") or "",
+            "Bin name": "",
+            "On hand (new)": "",
+        }
+
+        # Primary stocking location row
+        primary_row = dict(base)
+        primary_row.update({
+            "Location": locs[0],
+            "Incoming (not editable)": 0,
+            "Unavailable (not editable)": 0,
+            "Committed (not editable)": 0,
+            "Available (not editable)": 0,
+            "On hand (current)": 0,
+            "On hand (new)": qty_primary,
+        })
+        out.append(primary_row)
+
+        # Other locations as not stocked
+        for loc in locs[1:]:
+            nr = dict(base)
+            nr.update({
+                "Location": loc,
+                "Incoming (not editable)": "not stocked",
+                "Unavailable (not editable)": "not stocked",
+                "Committed (not editable)": "not stocked",
+                "Available (not editable)": "not stocked",
+                "On hand (current)": "not stocked",
+                "On hand (new)": "not stocked",
+            })
+            out.append(nr)
+    return out
 
 STATUS_VALUES = {"active","draft","archived"}
 WEIGHT_UNITS = {"g","kg","lb","oz"}
@@ -192,12 +473,6 @@ def broadcast_values(value_str, n1, n2, n3, field, rownum, issues: List[dict]) -
                     out.append(v)
         return out
     if len(vals) == n1 * n3 and n2 > 1:
-        idx = 0
-        for i in range(n1):
-            for k in range(n3):
-                v = vals[idx]; idx += 1
-                for j in range(n2):
-                    out.append(v)
         out2 = []
         for i in range(n1):
             for j in range(n2):
@@ -343,9 +618,33 @@ def build_shopify_rows(df: pd.DataFrame, highest_prev_base: int, respect_existin
 
         vprice_list = broadcast_values(r.get("Variant Price*",""), n1, n2, n3, "Variant Price*", excel_row, issues)
         vcmp_list   = broadcast_values(r.get("Variant Compare At Price",""), n1, n2, n3, "Variant Compare At Price", excel_row, issues)
-        vqty_list = broadcast_values("1000", n1, n2, n3, "Variant Inventory Qty", excel_row, issues)
-        vbar_list   = broadcast_values(r.get("Variant Barcode (EAN/UPC)",""), n1, n2, n3, "Variant Barcode", excel_row, issues)
-        vwt_list    = broadcast_values(r.get("Variant Weight",""), n1, n2, n3, "Variant Weight", excel_row, issues)
+
+        # Inventory input:
+        # - If no variants, user enters a single value (0 or 1; 0=out of stock, 1=in stock)
+        # - If variants, user enters pipe list (e.g. 0|1|1|0)
+        inv_value_str = build_inventory_pipe_for_sizes(r, o1vals) or str(r.get("Variant Inventory", "")).strip() or "1"
+        vinv_list_raw = broadcast_values(inv_value_str, n1, n2, n3, "Variant Inventory", excel_row, issues)
+
+        def _inv_to_qty(tok: str) -> str:
+            s = str(tok or "").strip().lower()
+            if s in {"", "1", "in", "instock", "in stock", "true", "yes"}:
+                return "1000"  # in stock
+            if s in {"0", "out", "oos", "outofstock", "out of stock", "false", "no"}:
+                return "0"     # out of stock
+            # Allow explicit quantities if user ever provides them
+            if s.isdigit():
+                return s
+            return "1000"
+
+        vqty_list = [_inv_to_qty(x) for x in vinv_list_raw]
+        barcode_value_str = build_barcode_pipe_for_sizes(r, o1vals)
+        vbar_list   = broadcast_values(barcode_value_str, n1, n2, n3, "Variant Barcode", excel_row, issues)
+        # Grams input (preferred). If blank, we will compute grams from Weight + Unit later.
+        grams_value_str = build_grams_pipe_for_sizes(r, o1vals)
+        vgrams_list = broadcast_values(grams_value_str, n1, n2, n3, "Variant Grams", excel_row, issues) if grams_value_str else ["" for _ in range(nvars)]
+
+        weight_value_str = build_weight_pipe_for_sizes(r, o1vals)
+        vwt_list    = broadcast_values(weight_value_str, n1, n2, n3, "Variant Weight", excel_row, issues)
         vunit_list  = broadcast_values(r.get("Variant Weight Unit (g,kg,lb,oz)",""), n1, n2, n3, "Variant Weight Unit", excel_row, issues)
         vship_list  = [coerce_bool_token(x) or "TRUE" for x in broadcast_values(r.get("Variant Requires Shipping (TRUE/FALSE)",""), n1, n2, n3, "Variant Requires Shipping", excel_row, issues)]
         vtax_list   = [coerce_bool_token(x) or "TRUE" for x in broadcast_values(r.get("Variant Taxable (TRUE/FALSE)",""), n1, n2, n3, "Variant Taxable", excel_row, issues)]
@@ -417,7 +716,12 @@ def build_shopify_rows(df: pd.DataFrame, highest_prev_base: int, respect_existin
             vunit  = (vunit_list[idxv] or "").lower()
             vship  = vship_list[idxv]
             vtax   = vtax_list[idxv]
-            vgrams = grams_from_weight(vwt, vunit) if vwt and vunit in WEIGHT_UNITS else ""
+            # Use explicit grams if provided, otherwise compute from Weight + Unit
+            vgrams_in = str(vgrams_list[idxv] or "").strip()
+            if vgrams_in:
+                vgrams = vgrams_in
+            else:
+                vgrams = grams_from_weight(vwt, vunit) if vwt and vunit in WEIGHT_UNITS else ""
             vsku   = assigned_skus[idxv]
 
             base_row = {
@@ -602,6 +906,85 @@ def write_title_matches_xlsx(matches_df: pd.DataFrame, outdir: Path, engine: str
         matches_df.to_csv(path, index=False, encoding="utf-8-sig")
         return path
 
+# ---------------- NEW: Template maker ----------------
+TEMPLATE_COLUMNS = [
+    "Handle (optional)",
+    "Title*",
+    "Body (HTML)",
+    "Vendor*",
+    "Type (Product Type)",
+    "Tags (comma-separated)",
+    "Published (TRUE/FALSE)",
+    "Status (active/draft/archived)",
+    "SEO Title",
+    "SEO Description",
+
+    # Options
+    "Option1 Name",
+    "Option1 Values",
+    "Option2 Name",
+    "Option2 Values",
+    "Option3 Name",
+    "Option3 Values",
+
+    # Pricing & tax/shipping
+    "Variant Price*",
+    "Variant Compare At Price",
+    "Variant Requires Shipping (TRUE/FALSE)",
+    "Variant Taxable (TRUE/FALSE)",
+
+    # Barcode, Grams & Inventory inputs in the template (read by the builder)
+    "Variant Barcode (EAN/UPC)",
+    "Variant Grams",
+    "Variant Inventory",
+
+    # Backwards-compat (older templates)
+    "Variant Weight",
+    "Variant Weight Unit (g,kg,lb,oz)",
+
+    # Optional prefill SKUs (pipe list). If blank, script assigns.
+    "Variant SKU",
+
+    # Images (first is primary)
+    "Image URL 1","Image Alt 1",
+    "Image URL 2","Image Alt 2",
+    "Image URL 3","Image Alt 3",
+    "Image URL 4","Image Alt 4",
+    "Image URL 5","Image Alt 5",
+    "Image URL 6","Image Alt 6",
+    "Image URL 7","Image Alt 7",
+    "Image URL 8","Image Alt 8",
+]
+
+README_LINES = [
+    "HOW TO USE:",
+    "• Fill one row per product. Use '|' to separate variant values (e.g., Option1 Values: 50|52|54).",
+    "• Columns marked * are required. Leave 'Variant SKU' blank to auto-assign.",
+    "• Variant Barcode/Grams/Inventory support pipe-lists and auto-broadcasting across combinations.",
+    "• 'Variant Inventory' uses 0=out of stock, 1=in stock (or you can enter quantities).",
+    "• If 'Variant Grams' is blank, you may still use the older 'Variant Weight' + 'Variant Weight Unit' (g,kg,lb,oz) and the script will compute grams.",
+    "• Image URL 1 is the main image; add up to 8 images per product.",
+    "• Published/Taxable/Requires Shipping accept TRUE/FALSE (case-insensitive).",
+]
+
+def write_template_file(path: Path):
+    df = pd.DataFrame(columns=TEMPLATE_COLUMNS)
+    engine = get_excel_engine()
+
+    # Always try to add a README sheet for Excel templates
+    if engine and str(path).lower().endswith((".xlsx", ".xls")):
+        with pd.ExcelWriter(path, engine=engine) as writer:
+            df.to_excel(writer, sheet_name="Products", index=False)
+            readme = pd.DataFrame({"Notes": README_LINES})
+            readme.to_excel(writer, sheet_name="README", index=False)
+        return path
+    else:
+        # CSV fallback (no README sheet possible)
+        if path.suffix.lower() != ".csv":
+            path = path.with_suffix(".csv")
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        return path
+
 # ---------------- CLI -------------------------------
 def main():
     _force_utf8_stdio()
@@ -619,7 +1002,18 @@ def main():
     ap.add_argument("--respect-existing-skus", action="store_true",
                     help="Keep any existing SKUs (pipe-list) and only fill blanks; default overwrites all SKUs per product")
 
+    # NEW: make a blank input template (with Barcode & Weight columns)
+    ap.add_argument("--make-template", metavar="PATH", help="Write a fresh input template to PATH (.xlsx preferred). Then exit.")
+
     args = ap.parse_args()
+
+    # --- NEW: Template creation mode ---
+    if args.make_template:
+        outp = Path(args.make_template)
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        template_path = write_template_file(outp)
+        print(f"Template written: {template_path}")
+        return
 
     inp = Path(args.input)
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
@@ -638,6 +1032,19 @@ def main():
     # Load input
     try:
         df = pd.read_excel(inp, sheet_name=args.sheet, dtype=str)
+        # --- Normalise Shopify-style template columns ---
+        cols = {c.strip(): c for c in df.columns}
+
+        # If Shopify's Variant Barcode column exists, map it to our template name
+        if "Variant Barcode (EAN/UPC)" not in df.columns and "Variant Barcode" in cols:
+            df["Variant Barcode (EAN/UPC)"] = df[cols["Variant Barcode"]]
+
+        # If Shopify's Variant Grams exists, convert into Variant Weight + Unit "g"
+        if "Variant Weight" not in df.columns and "Variant Grams" in cols:
+            grams_col = cols["Variant Grams"]
+            df["Variant Weight"] = df[grams_col]
+            df["Variant Weight Unit (g,kg,lb,oz)"] = "g"
+
     except Exception as e:
         print(f"ERROR: Could not read input Excel: {e}", file=sys.stderr)
         sys.exit(3)
@@ -653,6 +1060,16 @@ def main():
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k,"") for k in SHOPIFY_HEADERS})
+
+
+    # Shopify Inventory Export-style CSV (for locations/stock sync)
+    inv_rows = build_shopify_inventory_export_rows(rows)
+    out_inv = outdir / "shopify_inventory_export.csv"
+    with out_inv.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=INVENTORY_EXPORT_HEADERS, extrasaction="ignore")
+        w.writeheader()
+        for r in inv_rows:
+            w.writerow({k: r.get(k,"") for k in INVENTORY_EXPORT_HEADERS})
 
     # Validation report
     rep_csv = outdir / "validation_report.csv"
@@ -715,13 +1132,17 @@ def main():
 
     print("\n===== OUTPUT FILES =====")
     print(f"- Shopify CSV       : {out_csv}")
+    print(f"- Shopify inventory : {out_inv}")
     print(f"- Validation report : {rep_csv}")
     print(f"- Input with SKUs   : {back_out}")
     print(f"- Image report      : {img_report_path}")
     print(f"- Title matches     : {match_report_path}")
     print(f"Writing to: {outdir.resolve()}")
 
-
 if __name__ == "__main__":
     _force_utf8_stdio()
     main()
+
+# UPDATE:
+# On hand (current) is forced to 0
+# On hand (new) carries inventory (0 or 1000)
