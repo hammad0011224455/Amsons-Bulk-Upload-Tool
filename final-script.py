@@ -337,8 +337,8 @@ def build_shopify_inventory_export_rows(shopify_rows: list, locations=None, in_s
                 "Incoming (not editable)": "not stocked",
                 "Unavailable (not editable)": "not stocked",
                 "Committed (not editable)": "not stocked",
-                "Available (not editable)": "not stocked",
-                "On hand (current)": "not stocked",
+                "Available (not editable)": 0,
+                "On hand (current)": 0,
                 "On hand (new)": "not stocked",
             })
             out.append(nr)
@@ -1145,4 +1145,4 @@ if __name__ == "__main__":
 
 # UPDATE:
 # On hand (current) is forced to 0
-# On hand (new) carries inventory (0 or 1000)
+# On hand (new) carries inventory (0 or 100)
